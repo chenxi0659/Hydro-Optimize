@@ -1,5 +1,7 @@
 const shortcutHintPattern = /\s*\((?:f9|f10|alt\+q)\)/gi;
 let toolbarObserver: MutationObserver | null = null;
+let pretestPaneObserver: ResizeObserver | null = null;
+let observedPretestPane: HTMLElement | null = null;
 let refreshFrame = 0;
 
 function removeShortcutHints(button: HTMLElement) {
@@ -36,9 +38,37 @@ function syncRunPretestButton(proxy: HTMLButtonElement) {
   if (proxy.classList.contains('disabled') !== disabled) proxy.classList.toggle('disabled', disabled);
 }
 
+function removePretestProxy() {
+  pretestPaneObserver?.disconnect();
+  observedPretestPane = null;
+  document.querySelector('.hydro-optimize-pretest-run')?.remove();
+  document.body.classList.remove('hydro-optimize-pretest-proxy-ready');
+}
+
+function positionPretestProxy(): boolean {
+  const proxy = document.querySelector<HTMLButtonElement>('.hydro-optimize-pretest-run');
+  if (!proxy || !observedPretestPane?.isConnected) return false;
+  const rect = observedPretestPane.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) {
+    proxy.hidden = true;
+    document.body.classList.remove('hydro-optimize-pretest-proxy-ready');
+    return false;
+  }
+
+  proxy.hidden = false;
+  const left = Math.max(rect.left + 64, rect.right - proxy.offsetWidth - 8);
+  proxy.style.left = `${Math.round(left)}px`;
+  proxy.style.top = `${Math.round(rect.top + 4)}px`;
+  document.body.classList.add('hydro-optimize-pretest-proxy-ready');
+  return true;
+}
+
 function installPretestPaneHeaders() {
   const inputs = Array.from(document.querySelectorAll<HTMLElement>('.scratchpad__data-input'));
-  if (inputs.length < 2) return;
+  if (inputs.length < 2) {
+    removePretestProxy();
+    return;
+  }
 
   inputs.slice(0, 2).forEach((input, index) => {
     const pane = input.parentElement;
@@ -56,19 +86,35 @@ function installPretestPaneHeaders() {
   });
 
   const inputPane = inputs[0].parentElement;
-  if (!inputPane || inputPane.querySelector('.hydro-optimize-pretest-run')) return;
+  if (!inputPane) {
+    removePretestProxy();
+    return;
+  }
 
-  // The original button remains mounted in the React toolbar. The proxy avoids
-  // moving React-owned DOM while keeping its existing click handler and state.
-  const runButton = document.createElement('button');
-  runButton.type = 'button';
-  runButton.className = 'hydro-optimize-pretest-run';
-  runButton.addEventListener('click', () => {
-    const original = document.querySelector<HTMLElement>('.scratchpad__toolbar__pretest');
-    if (original && !original.classList.contains('disabled')) original.click();
-  });
-  inputPane.append(runButton);
+  let runButton = document.querySelector<HTMLButtonElement>('.hydro-optimize-pretest-run');
+  if (!runButton) {
+    // Keep the proxy outside React-owned nodes. It forwards clicks to Hydro's
+    // original button, so submit/pretest behavior remains controlled by Hydro.
+    runButton = document.createElement('button');
+    runButton.type = 'button';
+    runButton.className = 'hydro-optimize-pretest-run';
+    runButton.addEventListener('click', () => {
+      const original = document.querySelector<HTMLElement>('.scratchpad__toolbar__pretest');
+      if (original && !original.classList.contains('disabled')) original.click();
+    });
+    document.body.append(runButton);
+  }
   syncRunPretestButton(runButton);
+
+  if (observedPretestPane !== inputPane) {
+    pretestPaneObserver?.disconnect();
+    observedPretestPane = inputPane;
+    if (typeof ResizeObserver !== 'undefined') {
+      pretestPaneObserver ||= new ResizeObserver(() => positionPretestProxy());
+      pretestPaneObserver.observe(inputPane);
+    }
+  }
+  positionPretestProxy();
 }
 
 function refreshScratchpadLayout() {
@@ -110,8 +156,8 @@ function mutationContainsScratchpad(mutation: MutationRecord): boolean {
   const nodes = [...Array.from(mutation.addedNodes), ...Array.from(mutation.removedNodes)];
   return nodes.some((node) => {
     if (!(node instanceof Element)) return false;
-    return node.matches('.scratchpad__toolbar, .scratchpad__data-input')
-      || !!node.querySelector('.scratchpad__toolbar, .scratchpad__data-input');
+    return node.matches('.scratchpad__toolbar, .scratchpad__data-input, .hydro-optimize-pretest-run')
+      || !!node.querySelector('.scratchpad__toolbar, .scratchpad__data-input, .hydro-optimize-pretest-run');
   });
 }
 
@@ -120,26 +166,37 @@ function installScratchpadLayoutStyles() {
   const style = document.createElement('style');
   style.id = 'hydro-optimize-scratchpad-layout-style';
   style.textContent = `
+    body.mode--scratchpad #scratchpad {
+      top: var(--hfb-nav-height, 45px);
+    }
     .scratchpad__toolbar {
-      gap: 8px;
-      min-height: 48px;
-      padding: 6px 10px;
+      box-sizing: border-box;
+      min-width: 0;
+      padding: 7px 8px;
       border-bottom: 1px solid var(--hfb-border, #d8dee4);
       background: var(--hfb-surface, #fff);
+      overflow-x: auto;
+      overflow-y: hidden;
+      white-space: nowrap;
     }
-    .scratchpad__toolbar__pretest { display: none !important; }
-    .scratchpad__toolbar__submit { order: 100; margin-left: auto; }
+    .scratchpad__toolbar__item { flex: 0 0 auto; }
+    body.hydro-optimize-pretest-proxy-ready .scratchpad__toolbar__pretest {
+      display: none !important;
+    }
+    .scratchpad__toolbar__submit {
+      order: 100;
+      margin-left: auto;
+      margin-right: 0;
+    }
     .scratchpad__toolbar__button,
     .hydro-optimize-pretest-run {
-      min-height: 32px;
-      padding: 0 12px;
+      box-sizing: border-box;
+      padding: 5px 9px;
       border: 1px solid #20242a !important;
       border-radius: 5px;
       background: #fff;
       color: #17191d !important;
       box-shadow: none;
-      font: inherit;
-      line-height: 30px;
       cursor: pointer;
       transition: background-color 160ms ease, color 160ms ease, border-color 160ms ease;
     }
@@ -160,7 +217,10 @@ function installScratchpadLayoutStyles() {
       cursor: not-allowed;
     }
     .scratchpad__toolbar .select {
-      min-height: 32px;
+      width: auto;
+      min-width: 108px;
+      height: 29px;
+      min-height: 29px;
       border: 1px solid #20242a;
       border-radius: 5px;
       background: #fff;
@@ -205,15 +265,13 @@ function installScratchpadLayoutStyles() {
       outline-offset: -2px;
     }
     .hydro-optimize-pretest-run {
-      position: absolute;
-      z-index: 2;
-      top: 4px;
-      right: 8px;
-      min-height: 30px;
-      line-height: 28px;
+      position: fixed;
+      z-index: 1200;
+      min-height: 29px;
+      line-height: 17px;
     }
     @media (max-width: 640px) {
-      .scratchpad__toolbar { gap: 5px; padding: 5px; }
+      .scratchpad__toolbar { padding: 5px; }
       .scratchpad__toolbar__button,
       .hydro-optimize-pretest-run { padding: 0 8px; }
     }
@@ -233,6 +291,7 @@ function initialiseScratchpadLayout() {
     childList: true,
     subtree: true,
   });
+  window.addEventListener('resize', scheduleScratchpadRefresh);
 }
 
 if (document.readyState === 'loading') {

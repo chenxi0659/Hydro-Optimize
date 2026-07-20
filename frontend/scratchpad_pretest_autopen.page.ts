@@ -1,18 +1,33 @@
+let autopenTimer = 0;
+
 function openScratchpadPretestWhenReady() {
+  window.clearInterval(autopenTimer);
   let attempts = 0;
-  const timer = window.setInterval(() => {
+  let dispatched = false;
+  autopenTimer = window.setInterval(() => {
     attempts += 1;
     const store = (window as any).store;
-    const pretestButton = document.querySelector('.scratchpad__toolbar__pretest');
-    if (store?.dispatch && pretestButton) {
+    const toolbar = document.querySelector('.scratchpad__toolbar');
+    const state = store?.getState?.();
+
+    if (toolbar && store?.dispatch && state?.ui?.pretest && !state.ui.pretest.visible) {
       store.dispatch({
         type: 'SCRATCHPAD_UI_SET_VISIBILITY',
         payload: { uiElement: 'pretest', visibility: true },
       });
-      window.clearInterval(timer);
-    } else if (attempts >= 100) {
-      // Scratchpad did not finish loading (or this problem does not support pretest).
-      window.clearInterval(timer);
+      dispatched = true;
+    } else if (toolbar && state?.ui?.pretest?.visible
+      && document.querySelectorAll('.scratchpad__data-input').length >= 2) {
+      // Redux visibility plus mounted controls prove the pane is ready.
+      window.clearInterval(autopenTimer);
+      autopenTimer = 0;
+      return;
+    }
+
+    // Retry long enough to cover Hydro's asynchronous editor/React loading.
+    if (attempts >= 200 || (dispatched && !document.body.classList.contains('mode--scratchpad'))) {
+      window.clearInterval(autopenTimer);
+      autopenTimer = 0;
     }
   }, 50);
 }
@@ -21,9 +36,11 @@ function initialiseScratchpadPretestAutopen() {
   document.addEventListener('click', (event) => {
     const target = event.target instanceof Element ? event.target : null;
     if (!target?.closest('[name="problem-sidebar__open-scratchpad"]')) return;
-    // Hydro initializes the React store asynchronously after this click.
+    // This runs in the capture phase before Hydro creates the Redux store, so
+    // the reducer's initial state already requests a visible pretest pane.
+    localStorage.setItem('scratchpad/pretest', 'true');
     window.setTimeout(openScratchpadPretestWhenReady, 0);
-  });
+  }, true);
 }
 
 if (document.readyState === 'loading') {
