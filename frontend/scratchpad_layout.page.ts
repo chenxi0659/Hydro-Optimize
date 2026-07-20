@@ -2,7 +2,12 @@ const shortcutHintPattern = /\s*\((?:f9|f10|alt\+q)\)/gi;
 
 function removeShortcutHints(button: HTMLElement) {
   const tooltip = button.getAttribute('data-tooltip');
-  if (tooltip) button.setAttribute('data-tooltip', tooltip.replace(shortcutHintPattern, '').trim());
+  if (tooltip) {
+    const nextTooltip = tooltip.replace(shortcutHintPattern, '').trim();
+    // Attribute mutations are observed below. Avoid writing an identical value,
+    // otherwise a toolbar refresh would schedule itself forever.
+    if (nextTooltip !== tooltip) button.setAttribute('data-tooltip', nextTooltip);
+  }
 
   const walker = document.createTreeWalker(button, NodeFilter.SHOW_TEXT);
   const nodes: Text[] = [];
