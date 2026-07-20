@@ -1,8 +1,29 @@
 const shortcutHintPattern = /\s*\((?:f9|f10|alt\+q)\)/gi;
 let toolbarObserver: MutationObserver | null = null;
 let pretestPaneObserver: ResizeObserver | null = null;
+let navigationObserver: ResizeObserver | null = null;
 let observedPretestPane: HTMLElement | null = null;
 let refreshFrame = 0;
+
+function syncScratchpadTopOffset() {
+  const navigation = document.querySelector<HTMLElement>('nav.nav, .nav');
+  const bottom = navigation?.getBoundingClientRect().bottom || 0;
+  if (bottom > 0) {
+    document.documentElement.style.setProperty(
+      '--hydro-optimize-scratchpad-top',
+      `${Math.ceil(bottom)}px`,
+    );
+  }
+}
+
+function observeNavigationHeight() {
+  syncScratchpadTopOffset();
+  const navigation = document.querySelector<HTMLElement>('nav.nav, .nav');
+  if (!navigation || typeof ResizeObserver === 'undefined') return;
+  navigationObserver ||= new ResizeObserver(syncScratchpadTopOffset);
+  navigationObserver.disconnect();
+  navigationObserver.observe(navigation);
+}
 
 function removeShortcutHints(button: HTMLElement) {
   const tooltip = button.getAttribute('data-tooltip');
@@ -121,6 +142,7 @@ function refreshScratchpadLayout() {
   // Updates below intentionally change toolbar text and attributes. Pause the
   // focused observer so those writes cannot recursively schedule themselves.
   toolbarObserver?.disconnect();
+  syncScratchpadTopOffset();
   document.querySelectorAll<HTMLElement>([
     '.scratchpad__toolbar__pretest',
     '.scratchpad__toolbar__submit',
@@ -167,16 +189,21 @@ function installScratchpadLayoutStyles() {
   style.id = 'hydro-optimize-scratchpad-layout-style';
   style.textContent = `
     body.mode--scratchpad #scratchpad {
-      top: var(--hfb-nav-height, 45px);
+      top: var(--hydro-optimize-scratchpad-top, var(--hfb-nav-height, 45px)) !important;
     }
     .scratchpad__toolbar {
+      position: relative;
+      z-index: 5;
+      flex: 0 0 auto !important;
       box-sizing: border-box;
+      width: 100%;
+      height: auto !important;
+      min-height: 43px;
       min-width: 0;
       padding: 7px 8px;
       border-bottom: 1px solid var(--hfb-border, #d8dee4);
       background: var(--hfb-surface, #fff);
-      overflow-x: auto;
-      overflow-y: hidden;
+      overflow: visible !important;
       white-space: nowrap;
     }
     .scratchpad__toolbar__item { flex: 0 0 auto; }
@@ -281,6 +308,7 @@ function installScratchpadLayoutStyles() {
 
 function initialiseScratchpadLayout() {
   installScratchpadLayoutStyles();
+  observeNavigationHeight();
   refreshScratchpadLayout();
   // The document observer only discovers Scratchpad mount/unmount events.
   // Toolbar state changes are handled by the focused observer above.
@@ -291,7 +319,10 @@ function initialiseScratchpadLayout() {
     childList: true,
     subtree: true,
   });
-  window.addEventListener('resize', scheduleScratchpadRefresh);
+  window.addEventListener('resize', () => {
+    syncScratchpadTopOffset();
+    scheduleScratchpadRefresh();
+  });
 }
 
 if (document.readyState === 'loading') {
