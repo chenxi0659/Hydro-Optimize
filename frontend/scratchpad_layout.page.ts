@@ -1,4 +1,6 @@
 const shortcutHintPattern = /\s*\((?:f9|f10|alt\+q)\)/gi;
+let toolbarObserver: MutationObserver | null = null;
+let refreshFrame = 0;
 
 function removeShortcutHints(button: HTMLElement) {
   const tooltip = button.getAttribute('data-tooltip');
@@ -30,8 +32,8 @@ function syncRunPretestButton(proxy: HTMLButtonElement) {
   const label = getPlainButtonLabel(original);
   if (label && proxy.textContent !== label) proxy.textContent = label;
   const disabled = original.classList.contains('disabled') || (original as HTMLButtonElement).disabled;
-  proxy.disabled = disabled;
-  proxy.classList.toggle('disabled', disabled);
+  if (proxy.disabled !== disabled) proxy.disabled = disabled;
+  if (proxy.classList.contains('disabled') !== disabled) proxy.classList.toggle('disabled', disabled);
 }
 
 function installPretestPaneHeaders() {
@@ -41,9 +43,16 @@ function installPretestPaneHeaders() {
   inputs.slice(0, 2).forEach((input, index) => {
     const pane = input.parentElement;
     if (!pane) return;
-    pane.classList.add('hydro-optimize-pretest-pane');
-    pane.classList.toggle('hydro-optimize-pretest-pane--input', index === 0);
-    pane.classList.toggle('hydro-optimize-pretest-pane--output', index === 1);
+    if (!pane.classList.contains('hydro-optimize-pretest-pane')) {
+      pane.classList.add('hydro-optimize-pretest-pane');
+    }
+    const isInput = index === 0;
+    if (pane.classList.contains('hydro-optimize-pretest-pane--input') !== isInput) {
+      pane.classList.toggle('hydro-optimize-pretest-pane--input', isInput);
+    }
+    if (pane.classList.contains('hydro-optimize-pretest-pane--output') === isInput) {
+      pane.classList.toggle('hydro-optimize-pretest-pane--output', !isInput);
+    }
   });
 
   const inputPane = inputs[0].parentElement;
@@ -63,6 +72,9 @@ function installPretestPaneHeaders() {
 }
 
 function refreshScratchpadLayout() {
+  // Updates below intentionally change toolbar text and attributes. Pause the
+  // focused observer so those writes cannot recursively schedule themselves.
+  toolbarObserver?.disconnect();
   document.querySelectorAll<HTMLElement>([
     '.scratchpad__toolbar__pretest',
     '.scratchpad__toolbar__submit',
@@ -70,6 +82,37 @@ function refreshScratchpadLayout() {
   ].join(',')).forEach(removeShortcutHints);
   installPretestPaneHeaders();
   document.querySelectorAll<HTMLButtonElement>('.hydro-optimize-pretest-run').forEach(syncRunPretestButton);
+  observeScratchpadToolbar();
+}
+
+function scheduleScratchpadRefresh() {
+  if (refreshFrame) return;
+  refreshFrame = window.requestAnimationFrame(() => {
+    refreshFrame = 0;
+    refreshScratchpadLayout();
+  });
+}
+
+function observeScratchpadToolbar() {
+  const toolbar = document.querySelector<HTMLElement>('.scratchpad__toolbar');
+  if (!toolbar) return;
+  if (!toolbarObserver) toolbarObserver = new MutationObserver(scheduleScratchpadRefresh);
+  toolbarObserver.observe(toolbar, {
+    attributes: true,
+    attributeFilter: ['class', 'data-tooltip', 'disabled'],
+    childList: true,
+    characterData: true,
+    subtree: true,
+  });
+}
+
+function mutationContainsScratchpad(mutation: MutationRecord): boolean {
+  const nodes = [...Array.from(mutation.addedNodes), ...Array.from(mutation.removedNodes)];
+  return nodes.some((node) => {
+    if (!(node instanceof Element)) return false;
+    return node.matches('.scratchpad__toolbar, .scratchpad__data-input')
+      || !!node.querySelector('.scratchpad__toolbar, .scratchpad__data-input');
+  });
 }
 
 function installScratchpadLayoutStyles() {
@@ -181,12 +224,13 @@ function installScratchpadLayoutStyles() {
 function initialiseScratchpadLayout() {
   installScratchpadLayoutStyles();
   refreshScratchpadLayout();
-  const observer = new MutationObserver(() => refreshScratchpadLayout());
-  observer.observe(document.body, {
-    attributes: true,
-    attributeFilter: ['class', 'data-tooltip', 'disabled'],
+  // The document observer only discovers Scratchpad mount/unmount events.
+  // Toolbar state changes are handled by the focused observer above.
+  const mountObserver = new MutationObserver((mutations) => {
+    if (mutations.some(mutationContainsScratchpad)) scheduleScratchpadRefresh();
+  });
+  mountObserver.observe(document.body, {
     childList: true,
-    characterData: true,
     subtree: true,
   });
 }
