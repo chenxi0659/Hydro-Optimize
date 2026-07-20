@@ -1,4 +1,4 @@
-import { Context } from 'hydrooj';
+import { Context, RecordModel } from 'hydrooj';
 
 type ScoreboardNode = {
     type: string;
@@ -15,6 +15,12 @@ type RankedRow = {
     elapsedSeconds: number;
     username: string;
 };
+
+type SubmissionCountMap = Map<string, number>;
+
+function submissionCountKey(uid: number, pid: number): string {
+    return `${uid}/${pid}`;
+}
 
 function getRecordTimestamp(raw: any): number | null {
     if (!raw) return null;
@@ -110,8 +116,80 @@ export function optimiseIoiScoreboard(tdoc: any, rows: ScoreboardRow[], udict: R
     rows.splice(1, rankedRows.length, ...rankedRows.map((entry) => entry.row));
 }
 
+function appendSubmissionCount(value: string, count: number): string {
+    if (!count) return value;
+    return `${value} <span style="color:#8a8a8a;font:inherit">(${count})</span>`;
+}
+
+export function addIoiSubmissionCounts(rows: ScoreboardRow[], counts: SubmissionCountMap) {
+    if (rows.length < 2) return;
+    const header = rows[0];
+    const userIndex = header.findIndex((node) => node.type === 'user');
+    const totalScoreIndex = header.findIndex((node) => node.type === 'total_score');
+    if (userIndex < 0 || totalScoreIndex < 0) return;
+
+    // Only normal web scoreboards have problem columns. Export views retain plain values.
+    const showStyledProblemCounts = header.some((node) => node.type === 'problem');
+    if (!showStyledProblemCounts) return;
+    for (const row of rows.slice(1)) {
+        const uid = Number(row[userIndex]?.raw);
+        if (!Number.isSafeInteger(uid)) continue;
+
+        let totalCount = 0;
+        for (let index = totalScoreIndex + 1; index < header.length; index++) {
+            const pid = Number(header[index]?.raw);
+            if (!Number.isSafeInteger(pid)) continue;
+            const count = counts.get(submissionCountKey(uid, pid)) || 0;
+            totalCount += count;
+            if (!count) continue;
+
+            const cell = row[index];
+            if (!cell) continue;
+            if (cell.type === 'records' && Array.isArray(cell.raw) && cell.raw.length) {
+                const visibleRecord = cell.raw[cell.raw.length - 1];
+                visibleRecord.value = appendSubmissionCount(String(visibleRecord.value || ''), count);
+            } else if (cell.type === 'record') {
+                cell.value = appendSubmissionCount(String(cell.value || ''), count);
+            }
+        }
+
+        const totalNode = row[totalScoreIndex];
+        if (!totalNode) continue;
+        const [score, ...timeLines] = String(totalNode.value || '').split('\n');
+        totalNode.value = `${score} (${totalCount})${timeLines.length ? `\n${timeLines.join('\n')}` : ''}`;
+    }
+}
+
+async function getIoiSubmissionCounts(tdoc: any, rows: ScoreboardRow[]): Promise<SubmissionCountMap> {
+    const header = rows[0] || [];
+    const userIndex = header.findIndex((node) => node.type === 'user');
+    if (userIndex < 0) return new Map();
+    const uids = rows.slice(1)
+        .map((row) => Number(row[userIndex]?.raw))
+        .filter((uid) => Number.isSafeInteger(uid));
+    if (!uids.length || !tdoc.pids?.length) return new Map();
+
+    const result = await RecordModel.coll.aggregate([
+        {
+            $match: {
+                domainId: tdoc.domainId,
+                contest: tdoc.docId,
+                uid: { $in: uids },
+                pid: { $in: tdoc.pids },
+            },
+        },
+        { $group: { _id: { uid: '$uid', pid: '$pid' }, count: { $sum: 1 } } },
+    ]).toArray();
+
+    const counts: SubmissionCountMap = new Map();
+    for (const item of result) counts.set(submissionCountKey(item._id.uid, item._id.pid), item.count);
+    return counts;
+}
+
 export async function apply(ctx: Context) {
-    ctx.on('contest/scoreboard', (tdoc: any, rows: ScoreboardRow[], udict: Record<number, any>) => {
+    ctx.on('contest/scoreboard', async (tdoc: any, rows: ScoreboardRow[], udict: Record<number, any>) => {
+        if (tdoc.rule !== 'ioi') return;
         optimiseIoiScoreboard(tdoc, rows, udict);
+        addIoiSubmissionCounts(rows, await getIoiSubmissionCounts(tdoc, rows));
     });
 }
