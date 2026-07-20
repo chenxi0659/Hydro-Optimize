@@ -1,0 +1,14 @@
+{
+  "name": "@chenxi0659/hydro-optimize",
+  "version": "1.0.0",
+  "description": "Targeted HydroOJ behavior optimizations",
+  "main": "index.ts",
+  "license": "MIT",
+  "peerDependencies": {
+    "hydrooj": "*"
+  },
+  "hydro": {
+    "addon": true
+  },
+  "repository": "https://github.com/chenxi0659/Hydro-Optimize.git"
+}
