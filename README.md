@@ -1,6 +1,6 @@
 # Hydro Optimize
 
-HydroOJ 的定向功能优化插件。当前版本只优化 IOI 比赛排行榜，不修改 Hydro 核心源码、赛制数据或评测逻辑。
+HydroOJ 的定向功能优化插件。
 
 ## IOI 排名优化
 
